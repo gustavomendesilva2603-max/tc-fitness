@@ -137,6 +137,20 @@
   #sucesso h2{font-size:1.5rem;font-weight:800;margin-bottom:8px}
   #sucesso p{color:var(--ink-soft);max-width:420px;margin:0 auto}
 
+  /* ===== Campo condicional ===== */
+  .campo[data-depende]{
+    overflow:hidden;
+    max-height:400px;
+    opacity:1;
+    transition:max-height .3s ease, opacity .2s ease, margin .3s ease;
+  }
+  .campo.oculto{
+    max-height:0 !important;
+    opacity:0 !important;
+    margin-bottom:0 !important;
+    pointer-events:none;
+  }
+
   @media (prefers-reduced-motion:reduce){*{transition:none !important;animation:none !important}}
 </style>
 </head>
@@ -231,7 +245,7 @@
       <p class="msg-erro">Selecione uma opção.</p>
     </div>
 
-    <div class="campo" data-req>
+    <div class="campo oculto" data-req data-depende="ja_treinou" data-valor="Sim" data-se-oculto="Nunca treinou">
       <label class="q" for="tempo_treino_ou_parado">8. Há quanto tempo treina ou ficou parado(a)? <span class="req">*</span></label>
       <input type="text" id="tempo_treino_ou_parado" name="tempo_treino_ou_parado" placeholder="Ex: treino há 6 meses / parado há 1 ano">
       <p class="msg-erro">Preencha este campo.</p>
@@ -634,9 +648,47 @@ function campoPreenchido(campo) {
   return input && input.value.trim() !== '';
 }
 
+/* ---------- Motor de perguntas condicionais ----------
+   Uso no HTML:
+     data-depende="nome_da_pergunta"  -> de quem depende
+     data-valor="Sim"                 -> aparece quando a resposta for isso
+     data-se-oculto="Nunca treinou"   -> o que mandar pro banco se ficar escondida
+   Para criar outra condicional, é só marcar a div .campo. Nada de JS novo.
+*/
+const condicionais = [...document.querySelectorAll('.campo[data-depende]')];
+
+function campoVisivel(campo) {
+  return !campo.classList.contains('oculto');
+}
+
+function aplicarCondicionais() {
+  condicionais.forEach(campo => {
+    const de       = campo.dataset.depende;
+    const esperado = campo.dataset.valor;
+    const marcado  = form.querySelector(`input[name="${de}"]:checked`);
+    const mostrar  = marcado && marcado.value === esperado;
+
+    campo.classList.toggle('oculto', !mostrar);
+
+    if (!mostrar) {
+      // limpa e tira o erro: pergunta escondida não pode travar o envio
+      campo.querySelectorAll('input').forEach(i => {
+        if (i.type === 'checkbox' || i.type === 'radio') i.checked = false;
+        else i.value = '';
+        i.classList.remove('invalido');
+      });
+      campo.classList.remove('erro');
+    }
+  });
+}
+
+// reavalia sempre que qualquer resposta muda
+form.addEventListener('change', () => { aplicarCondicionais(); atualizarProgresso(); });
+
 function atualizarProgresso() {
-  const feitos = campos.filter(campoPreenchido).length;
-  const pct = Math.round((feitos / campos.length) * 100);
+  const ativos = campos.filter(campoVisivel);
+  const feitos = ativos.filter(campoPreenchido).length;
+  const pct = ativos.length ? Math.round((feitos / ativos.length) * 100) : 0;
   fill.style.width = pct + '%';
   label.textContent = pct + '%';
 }
@@ -652,6 +704,12 @@ function validar() {
   let primeiroErro = null;
 
   campos.forEach(campo => {
+    // pergunta escondida não é validada
+    if (!campoVisivel(campo)) {
+      campo.classList.remove('erro');
+      return;
+    }
+
     let valido = campoPreenchido(campo);
 
     const email = campo.querySelector('input[type=email]');
@@ -699,6 +757,19 @@ function montarPayload() {
   const pega     = n => (fd.get(n) || '').toString().trim();
   const pegaTodos = n => fd.getAll(n).map(String);
 
+  // Campo condicional escondido não vem no FormData (está vazio).
+  // Como a coluna é NOT NULL no banco, mandamos o texto do
+  // data-se-oculto. Assim o painel mostra "Nunca treinou" em vez
+  // de um campo em branco sem explicação.
+  const fallback = {};
+  condicionais.forEach(campo => {
+    if (!campoVisivel(campo) && campo.dataset.seOculto) {
+      const input = campo.querySelector('input[name]');
+      if (input) fallback[input.name] = campo.dataset.seOculto;
+    }
+  });
+  const pegaCond = n => fallback[n] ?? pega(n);
+
   return {
     cliente_id: CLIENTE.id,          // <- é isto que separa um cliente do outro
 
@@ -710,7 +781,7 @@ function montarPayload() {
     email: pega('email').toLowerCase(),
 
     ja_treinou: pega('ja_treinou'),
-    tempo_treino_ou_parado: pega('tempo_treino_ou_parado'),
+    tempo_treino_ou_parado: pegaCond('tempo_treino_ou_parado'),
     teve_acompanhamento: pega('teve_acompanhamento'),
     outra_atividade: pega('outra_atividade'),
 
@@ -802,6 +873,7 @@ form.addEventListener('submit', async e => {
 
 /* ---------- Start ---------- */
 carregarCliente();
+aplicarCondicionais();
 atualizarProgresso();
 </script>
 </body>
